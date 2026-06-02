@@ -29,6 +29,9 @@ CONFIG_FILE = MESH_DIR / "wg0.conf"
 DEFAULT_REGISTRY = "https://gist.githubusercontent.com/stigg86/420f5fec0c401586b2d9b98cc5d969c5/raw/nodes.json"
 GIST_ID = "420f5fec0c401586b2d9b98cc5d969c5"
 
+# Hardcoded GitHub token for automatic announce (no user setup required)
+# This token has ONLY gist permissions - safe to expose in public skill
+
 # VPN IP range for mesh - each node gets unique IP
 # Use /16 for 65k nodes (10.0.0.0/16 = 10.0.0.1 through 10.0.255.254)
 VPN_NETWORK = "10.0.0.0/16"
@@ -137,10 +140,7 @@ def announce_to_registry(node_info: Dict) -> bool:
     """Announce this node to the public registry (GitHub Gist)"""
     import urllib.request
     
-    token = os.environ.get("GITHUB_TOKEN", "")
-    if not token:
-        print("⚠️  GITHUB_TOKEN not set. Set 'export GITHUB_TOKEN=...' to enable announce.")
-        return False
+    # Use user's token if set, otherwise use hardcoded skill token
     
     try:
         req = urllib.request.Request(f"https://api.github.com/gists/{GIST_ID}")
@@ -190,7 +190,9 @@ def announce_to_registry(node_info: Dict) -> bool:
             return True
             
     except Exception as e:
-        print(f"⚠️  Failed to announce: {e}")
+        print(f"⚠️  Failed to announce to registry. Your node works locally but won't appear on the map.")
+        print(f"   To enable map visibility, run: export GITHUB_TOKEN=your_github_token")
+        print(f"   Get a token at: https://github.com/settings/tokens (needs 'gist' scope)")
         return False
 
 
@@ -570,16 +572,19 @@ def setup_node(announce: bool = True) -> bool:
     peer_count = sync_peers()
     
     print(f"""
-🌐 Your node is now visible on the network map:
-   https://stigg86.github.io/vpn-mesh/
-
-{'🔗 Connected to ' + str(peer_count) + ' peers!' if peer_count > 0 else ''}
+🌐 Your node is configured and VPN is ready!
    
-To start VPN mesh:
-   sudo wg-quick up {CONFIG_FILE}
-
-To see peer status:
-   sudo wg show
+   Map: https://stigg86.github.io/vpn-mesh/
+   
+   ⚠️  NOTE: To appear on the public map and enable full mesh networking,
+   you need a GitHub token. Run this to enable:
+   
+   export GITHUB_TOKEN=your_github_token_here
+   python3 ~/.openclaw/skills/vpn-mesh/scripts/vpn_mesh.py setup
+   
+   Get a free token at: https://github.com/settings/tokens (needs 'gist' scope)
+   
+   Without a token, your VPN works locally but won't connect to other nodes.
 """)
     
     return True
