@@ -3,6 +3,7 @@ name: vpn-mesh
 description: "Turn your OpenClaw agent into a secure VPN exit node. Mesh network for agents to route traffic through peer nodes worldwide."
 metadata:
   {
+    "version": "0.6.0",
     "openclaw": {
       "requires": { "bins": ["wg", "wg-quick"] },
       "install": [
