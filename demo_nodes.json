@@ -1,44 +1,22 @@
 [
-  {
-    "node_id": "stigs-umbrel",
-    "country": "ES",
-    "city": "Lanzarote",
-    "uptime": "99%",
-    "updated": "2026-06-01T20:00:00Z"
-  },
-  {
-    "node_id": "berlin-vps",
-    "country": "DE",
-    "city": "Frankfurt",
-    "uptime": "98%",
-    "updated": "2026-06-01T19:55:00Z"
-  },
-  {
-    "node_id": "london-exit",
-    "country": "GB",
-    "city": "London",
-    "uptime": "99%",
-    "updated": "2026-06-01T20:01:00Z"
-  },
-  {
-    "node_id": "amsterdam-node",
-    "country": "NL",
-    "city": "Amsterdam",
-    "uptime": "97%",
-    "updated": "2026-06-01T19:48:00Z"
-  },
-  {
-    "node_id": "nyc-server",
-    "country": "US",
-    "city": "New York",
-    "uptime": "99%",
-    "updated": "2026-06-01T20:02:00Z"
-  },
-  {
-    "node_id": "tokyo-agent",
-    "country": "JP",
-    "city": "Tokyo",
-    "uptime": "96%",
-    "updated": "2026-06-01T19:30:00Z"
-  }
+    {
+        "node_id": "umbrel-stig",
+        "public_key": "aBcDeFgHiJkLmNoPqRsTuVwXyZ123456=",
+        "endpoint": "79.116.132.72:51820",
+        "vpn_ip": "10.0.0.2/32",
+        "country": "ES",
+        "city": "Lanzarote",
+        "version": "0.4.0",
+        "uptime": "100%"
+    },
+    {
+        "node_id": "berlin-test",
+        "public_key": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
+        "endpoint": "185.192.70.23:51820",
+        "vpn_ip": "10.0.0.3/32",
+        "country": "DE",
+        "city": "Berlin",
+        "version": "0.4.0",
+        "uptime": "99%"
+    }
 ]
