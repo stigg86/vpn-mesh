@@ -1,0 +1,72 @@
+[
+    {
+        "node_id": "umbrel-stig",
+        "public_key": "aBcDeFgHiJkLmNoPqRsTuVwXyZ123456=",
+        "endpoint": "79.116.132.72:51820",
+        "vpn_ip": "10.0.0.2/32",
+        "country": "ES",
+        "city": "Lanzarote",
+        "version": "0.7.0",
+        "uptime": "100%"
+    },
+    {
+        "node_id": "berlin-test",
+        "public_key": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
+        "endpoint": "185.192.70.23:51820",
+        "vpn_ip": "10.0.0.3/32",
+        "country": "DE",
+        "city": "Berlin",
+        "version": "0.7.0",
+        "uptime": "99%"
+    },
+    {
+        "node_id": "london-demo",
+        "public_key": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=",
+        "endpoint": "5.68.195.34:51820",
+        "vpn_ip": "10.0.0.4/32",
+        "country": "GB",
+        "city": "London",
+        "version": "0.7.0",
+        "uptime": "98%"
+    },
+    {
+        "node_id": "amsterdam-demo",
+        "public_key": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD=",
+        "endpoint": "136.0.42.18:51820",
+        "vpn_ip": "10.0.0.5/32",
+        "country": "NL",
+        "city": "Amsterdam",
+        "version": "0.7.0",
+        "uptime": "99%"
+    },
+    {
+        "node_id": "newyork-demo",
+        "public_key": "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE=",
+        "endpoint": "45.32.58.77:51820",
+        "vpn_ip": "10.0.0.6/32",
+        "country": "US",
+        "city": "New York",
+        "version": "0.7.0",
+        "uptime": "97%"
+    },
+    {
+        "node_id": "tokyo-demo",
+        "public_key": "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF=",
+        "endpoint": "108.61.201.42:51820",
+        "vpn_ip": "10.0.0.7/32",
+        "country": "JP",
+        "city": "Tokyo",
+        "version": "0.7.0",
+        "uptime": "100%"
+    },
+    {
+        "node_id": "singapore-demo",
+        "public_key": "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG=",
+        "endpoint": "103.81.85.22:51820",
+        "vpn_ip": "10.0.0.8/32",
+        "country": "SG",
+        "city": "Singapore",
+        "version": "0.7.0",
+        "uptime": "99%"
+    }
+]

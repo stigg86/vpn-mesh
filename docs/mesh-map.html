@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🌐 VPN Mesh Network</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-card: #1a1a25;
+            --accent: #6366f1;
+            --accent-glow: rgba(99, 102, 241, 0.3);
+            --text-primary: #ffffff;
+            --text-secondary: #a0a0b0;
+            --border: rgba(255, 255, 255, 0.1);
+            --success: #22c55e;
+            --warning: #f59e0b;
+        }
+        
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+        
+        .bg-pattern {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: 
+                radial-gradient(circle at 20% 80%, var(--accent-glow) 0%, transparent 50%),
+                radial-gradient(circle at 80% 20%, rgba(99, 102, 241, 0.15) 0%, transparent 40%);
+            pointer-events: none;
+            z-index: 0;
+        }
+        
+        .container {
+            position: relative;
+            z-index: 1;
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        
+        header {
+            text-align: center;
+            padding: 60px 0;
+        }
+        
+        h1 {
+            font-size: 3.5em;
+            font-weight: 700;
+            background: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 16px;
+            letter-spacing: -0.02em;
+        }
+        
+        .subtitle {
+            font-size: 1.25em;
+            color: var(--text-secondary);
+            font-weight: 400;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 24px;
+            margin: 40px 0;
+        }
+        
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 28px;
+            text-align: center;
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3), 0 0 60px var(--accent-glow);
+        }
+        
+        .stat-value {
+            font-size: 3em;
+            font-weight: 700;
+            background: linear-gradient(135deg, #6366f1, #a855f7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .stat-label {
+            font-size: 0.9em;
+            color: var(--text-secondary);
+            margin-top: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+        
+        .live-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: var(--bg-card);
+            border-radius: 20px;
+            font-size: 0.85em;
+            margin-top: 20px;
+        }
+        
+        .live-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--success);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .map-section {
+            margin: 40px 0;
+        }
+        
+        #map {
+            height: 500px;
+            border-radius: 16px;
+            z-index: 1;
+        }
+        
+        .nodes-section {
+            margin-top: 40px;
+        }
+        
+        .section-title {
+            font-size: 1.5em;
+            font-weight: 600;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .nodes-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 20px;
+        }
+        
+        .node-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .node-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        
+        .node-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 16px;
+        }
+        
+        .node-id {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.1em;
+            font-weight: 600;
+        }
+        
+        .node-flag {
+            font-size: 2em;
+        }
+        
+        .node-info {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        
+        .info-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        
+        .info-label {
+            font-size: 0.75em;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        
+        .info-value {
+            font-size: 0.95em;
+            font-weight: 500;
+        }
+        
+        .node-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.8em;
+            font-weight: 500;
+        }
+        
+        .node-status.online {
+            background: rgba(34, 197, 94, 0.15);
+            color: var(--success);
+        }
+        
+        .connect-btn {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 10px;
+            font-size: 0.9em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: var(--accent);
+            color: white;
+        }
+        
+        .connect-btn:hover {
+            transform: scale(1.02);
+            box-shadow: 0 4px 20px var(--accent-glow);
+        }
+        
+        .footer {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-secondary);
+        }
+        
+        .footer a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+        
+        /* Leaflet custom styles */
+        .custom-marker {
+            background: transparent;
+        }
+        
+        .marker-pin {
+            width: 40px;
+            height: 40px;
+            border-radius: 50% 50% 50% 0;
+            background: var(--accent);
+            position: absolute;
+            transform: rotate(-45deg);
+            left: -20px;
+            top: -40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 20px rgba(99, 102, 241, 0.5);
+        }
+        
+        .marker-pin::after {
+            content: '';
+            width: 20px;
+            height: 20px;
+            background: white;
+            border-radius: 50%;
+            transform: rotate(45deg);
+        }
+        
+        .leaflet-popup-content-wrapper {
+            background: var(--bg-card);
+            color: var(--text-primary);
+            border-radius: 12px;
+        }
+        
+        .leaflet-popup-tip {
+            background: var(--bg-card);
+        }
+    </style>
+</head>
+<body>
+    <div class="bg-pattern"></div>
+    <div class="container">
+        <header>
+            <h1>🌐 VPN Mesh</h1>
+            <p class="subtitle">Decentralized VPN exit nodes powered by OpenClaw agents</p>
+            <div class="live-indicator">
+                <span class="live-dot"></span>
+                <span>Live Network • Updated just now</span>
+            </div>
+        </header>
+        
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value">8</div>
+                <div class="stat-label">Active Nodes</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">6</div>
+                <div class="stat-label">Countries</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">98%</div>
+                <div class="stat-label">Avg Uptime</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">2</div>
+                <div class="stat-label">Peers Online</div>
+            </div>
+        </div>
+        
+        <div class="map-section">
+            <div id="map"></div>
+        </div>
+        
+        <div class="nodes-section">
+            <h2 class="section-title">🖧 Nodes (8)</h2>
+            <div class="nodes-grid">
+
+            <div class="node-card">
+                <div class="node-header">
+                    <div>
+                        <div class="node-id">umbrel-stig</span></div>
+                        <span style='font-size: 0.8em; color: var(--text-secondary);'>Your node</span>
+                    </div>
+                    <div class="node-flag">🇪🇸</div>
+                </div>
+                <div class="node-info">
+                    <div class="info-item">
+                        <span class="info-label">Country</span>
+                        <span class="info-value">Spain</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">City</span>
+                        <span class="info-value">Lanzarote</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Uptime</span>
+                        <span class="info-value">100%</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Version</span>
+                        <span class="info-value">0.4.0</span>
+                    </div>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span class="node-status online">✓ Online</span>
+                </div>
+                <button class='connect-btn' style='background: var(--bg-secondary); cursor: default;'>✓ This is your node</button>
+            </div>
+
+            <div class="node-card">
+                <div class="node-header">
+                    <div>
+                        <div class="node-id">berlin-test</span></div>
+                        
+                    </div>
+                    <div class="node-flag">🇩🇪</div>
+                </div>
+                <div class="node-info">
+                    <div class="info-item">
+                        <span class="info-label">Country</span>
+                        <span class="info-value">Germany</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">City</span>
+                        <span class="info-value">Berlin</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Uptime</span>
+                        <span class="info-value">99%</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Version</span>
+                        <span class="info-value">0.4.0</span>
+                    </div>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span class="node-status online">✓ Online</span>
+                </div>
+                <button class='connect-btn' onclick='alert("Run: vpn_mesh connect berlin-test")'>Connect</button>
+            </div>
+
+            <div class="node-card">
+                <div class="node-header">
+                    <div>
+                        <div class="node-id">stigs-umbrel</span></div>
+                        
+                    </div>
+                    <div class="node-flag">🇪🇸</div>
+                </div>
+                <div class="node-info">
+                    <div class="info-item">
+                        <span class="info-label">Country</span>
+                        <span class="info-value">Spain</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">City</span>
+                        <span class="info-value">Lanzarote</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Uptime</span>
+                        <span class="info-value">99%</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Version</span>
+                        <span class="info-value">unknown</span>
+                    </div>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span class="node-status online">✓ Online</span>
+                </div>
+                <button class='connect-btn' onclick='alert("Run: vpn_mesh connect stigs-umbrel")'>Connect</button>
+            </div>
+
+            <div class="node-card">
+                <div class="node-header">
+                    <div>
+                        <div class="node-id">berlin-vps</span></div>
+                        
+                    </div>
+                    <div class="node-flag">🇩🇪</div>
+                </div>
+                <div class="node-info">
+                    <div class="info-item">
+                        <span class="info-label">Country</span>
+                        <span class="info-value">Germany</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">City</span>
+                        <span class="info-value">Frankfurt</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Uptime</span>
+                        <span class="info-value">98%</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Version</span>
+                        <span class="info-value">unknown</span>
+                    </div>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span class="node-status online">✓ Online</span>
+                </div>
+                <button class='connect-btn' onclick='alert("Run: vpn_mesh connect berlin-vps")'>Connect</button>
+            </div>
+
+            <div class="node-card">
+                <div class="node-header">
+                    <div>
+                        <div class="node-id">london-exit</span></div>
+                        
+                    </div>
+                    <div class="node-flag">🇬🇧</div>
+                </div>
+                <div class="node-info">
+                    <div class="info-item">
+                        <span class="info-label">Country</span>
+                        <span class="info-value">United Kingdom</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">City</span>
+                        <span class="info-value">London</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Uptime</span>
+                        <span class="info-value">99%</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Version</span>
+                        <span class="info-value">unknown</span>
+                    </div>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span class="node-status online">✓ Online</span>
+                </div>
+                <button class='connect-btn' onclick='alert("Run: vpn_mesh connect london-exit")'>Connect</button>
+            </div>
+
+            <div class="node-card">
+                <div class="node-header">
+                    <div>
+                        <div class="node-id">amsterdam-node</span></div>
+                        
+                    </div>
+                    <div class="node-flag">🇳🇱</div>
+                </div>
+                <div class="node-info">
+                    <div class="info-item">
+                        <span class="info-label">Country</span>
+                        <span class="info-value">Netherlands</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">City</span>
+                        <span class="info-value">Amsterdam</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Uptime</span>
+                        <span class="info-value">97%</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Version</span>
+                        <span class="info-value">unknown</span>
+                    </div>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span class="node-status online">✓ Online</span>
+                </div>
+                <button class='connect-btn' onclick='alert("Run: vpn_mesh connect amsterdam-node")'>Connect</button>
+            </div>
+
+            <div class="node-card">
+                <div class="node-header">
+                    <div>
+                        <div class="node-id">nyc-server</span></div>
+                        
+                    </div>
+                    <div class="node-flag">🇺🇸</div>
+                </div>
+                <div class="node-info">
+                    <div class="info-item">
+                        <span class="info-label">Country</span>
+                        <span class="info-value">United States</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">City</span>
+                        <span class="info-value">New York</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Uptime</span>
+                        <span class="info-value">99%</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Version</span>
+                        <span class="info-value">unknown</span>
+                    </div>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span class="node-status online">✓ Online</span>
+                </div>
+                <button class='connect-btn' onclick='alert("Run: vpn_mesh connect nyc-server")'>Connect</button>
+            </div>
+
+            <div class="node-card">
+                <div class="node-header">
+                    <div>
+                        <div class="node-id">tokyo-agent</span></div>
+                        
+                    </div>
+                    <div class="node-flag">🇯🇵</div>
+                </div>
+                <div class="node-info">
+                    <div class="info-item">
+                        <span class="info-label">Country</span>
+                        <span class="info-value">Japan</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">City</span>
+                        <span class="info-value">Tokyo</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Uptime</span>
+                        <span class="info-value">96%</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Version</span>
+                        <span class="info-value">unknown</span>
+                    </div>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span class="node-status online">✓ Online</span>
+                </div>
+                <button class='connect-btn' onclick='alert("Run: vpn_mesh connect tokyo-agent")'>Connect</button>
+            </div>
+
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>Install your own node → <a href="https://clawhub.ai/stigg86/vpn-mesh">clawhub install vpn-mesh</a></p>
+        </div>
+    </div>
+    
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        // Fetch nodes from Gist registry
+let nodes = [];
+async function loadNodes() {
+    try {
+        const resp = await fetch('https://gist.githubusercontent.com/stigg86/420f5fec0c401586b2d9b98cc5d969c5/raw/nodes.json');
+        nodes = await resp.json();
+    } catch(e) {
+        console.warn('Could not fetch nodes from registry:', e);
+        nodes = [];
+    }
+}
+loadNodes();
+        const coords = {"GB": [54.0, -2.0], "JP": [36.0, 138.0], "DE": [51.0, 10.0], "US": [40.0, -100.0], "ES": [39.5, -4.0], "NL": [52.5, 5.5]};
+        
+        const nodeIcon = L.divIcon({
+            className: 'custom-marker',
+            html: '<div class="marker-pin"></div>',
+            iconSize: [40, 40],
+            iconAnchor: [20, 40],
+            popupAnchor: [0, -40]
+        });
+        
+        const map = L.map('map').setView([30, 0], 2);
+        
+        L.tileLayer('https{{}}.{{}}'.replace('{{}}', '').replace('{{}}', ''), {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+        }).addTo(map);
+        
+        // Fix tile layer
+        L.tileLayer('https://{}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+            maxZoom: 19
+        }).addTo(map);
+        
+        const markers = [];
+        nodes.forEach(node => {
+            const country = node.country || 'XX';
+            const [lat, lng] = coords[country] || [20, 0];
+            
+            const popup = L.popup()
+                .setContent(`
+                    <div style="min-width: 200px;">
+                        <h3 style="margin: 0 0 8px;">${node.node_id}</h3>
+                        <p style="margin: 4px 0; color: #a0a0b0;">📍 ${node.city || 'Unknown'}, ${node.country}</p>
+                        <p style="margin: 4px 0; color: #a0a0b0;">⏱️ Uptime: ${node.uptime || 'N/A'}</p>
+                        ${node.endpoint ? `<p style="margin: 4px 0; color: #a0a0b0;">🌐 ${node.endpoint}</p>` : ''}
+                    </div>
+                `);
+            
+            const marker = L.marker([lat, lng], { icon: nodeIcon })
+                .bindPopup(popup)
+                .addTo(map);
+            
+            markers.push(marker);
+        });
+        
+        // Fit bounds if we have nodes
+        if (nodes.length > 0) {
+            const group = L.featureGroup(markers);
+            map.fitBounds(group.getBounds().pad(0.2));
+        }
+    </script>
+</body>
+</html>
