@@ -11,11 +11,15 @@ CONFIG="${MESH_DIR}/wg0.conf"
 PRIVATE_KEY_FILE="${MESH_DIR}/private.key"
 PUBLIC_KEY_FILE="${MESH_DIR}/public.key"
 
+# GitHub Gist registry
+GIST_ID="${VPN_MESH_GIST_ID:-420f5fec0c401586b2d9b98cc5d969c5}"
+GIST_REGISTRY_URL="https://gist.githubusercontent.com/stigg86/${GIST_ID}/raw/nodes.json"
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 echo -e "${CYAN}"
 echo "=========================================="
@@ -24,11 +28,88 @@ echo "=========================================="
 echo -e "${NC}"
 echo ""
 
+announce_to_registry() {
+    local node_json="$1"
+    local token="${GITHUB_TOKEN:-}"
+    
+    if [ -z "$token" ]; then
+        echo -e "${YELLOW}⚠️  GITHUB_TOKEN not set - skipping registry announce${NC}"
+        echo "   Set 'export GITHUB_TOKEN=your-token' to enable auto-announce"
+        return 1
+    fi
+    
+    echo -e "${CYAN}📡 Announcing to mesh registry...${NC}"
+    
+    # Get current nodes from Gist API
+    local gist_data
+    gist_data=$(curl -s -H "Authorization: token $token" \
+        "https://api.github.com/gists/$GIST_ID")
+    
+    local raw_url
+    raw_url=$(echo "$gist_data" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['files']['nodes.json']['raw_url'])" 2>/dev/null || echo "")
+    
+    if [ -z "$raw_url" ]; then
+        echo -e "${YELLOW}⚠️  Could not fetch Gist - announcing skipped${NC}"
+        return 1
+    fi
+    
+    # Fetch current nodes
+    local current_nodes
+    current_nodes=$(curl -s "$raw_url" 2>/dev/null || echo "[]")
+    
+    # Add/update this node (by public_key)
+    local pubkey
+    pubkey=$(echo "$node_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('public_key',''))" 2>/dev/null || echo "")
+    
+    # Use python to merge nodes
+    local new_registry
+    new_registry=$(python3 << PYTHON
+import json
+import sys
+
+current = json.loads('$current_nodes') if '$current_nodes' != '[]' else []
+new_node = json.loads('$node_json')
+
+# Remove existing node with same public_key
+current = [n for n in current if n.get('public_key') != new_node.get('public_key')]
+current.append(new_node)
+
+print(json.dumps(current, indent=2))
+PYTHON
+)
+    
+    # Update Gist
+    local update_result
+    update_result=$(curl -s -X PATCH -H "Authorization: token $token" \
+        -H "Content-Type: application/json" \
+        -d "{\"files\":{\"nodes.json\":{\"content\":$(echo "$new_registry" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')}}}" \
+        "https://api.github.com/gists/$GIST_ID" 2>/dev/null)
+    
+    if echo "$update_result" | grep -q '"updated_at"'; then
+        local node_count
+        node_count=$(echo "$new_registry" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "?")
+        echo -e "${GREEN}✓${NC} Announced to registry ($node_count total nodes)"
+    else
+        echo -e "${YELLOW}⚠️  Registry update failed - node registered locally${NC}"
+    fi
+    
+    return 0
+}
+
 # Check if already configured
 if [ -f "$REGISTRY" ]; then
     echo -e "${YELLOW}⚠️  Node already configured at $MESH_DIR${NC}"
     echo "   Run 'vpn_mesh.py status' to see your node info"
-    echo "   Delete $REGISTRY to reconfigure"
+    
+    # Offer to re-announce
+    if [ -n "$GITHUB_TOKEN" ]; then
+        echo ""
+        read -p "Re-announce to registry? [y/N] " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            announce_to_registry "$(cat "$REGISTRY")"
+        fi
+    fi
     exit 0
 fi
 
@@ -43,7 +124,6 @@ check_wireguard() {
     fi
 }
 
-# Check for Docker (alternative)
 check_docker() {
     if command -v docker &> /dev/null; then
         return 0
@@ -55,18 +135,15 @@ check_docker() {
 echo -e "${GREEN}✓${NC} Mesh directory created: $MESH_DIR"
 echo ""
 
-# Try WireGuard first, then Docker, then generate keys anyway
+WG_AVAILABLE=false
 if check_wireguard; then
     echo -e "${GREEN}✓${NC} WireGuard found"
     WG_AVAILABLE=true
 elif check_docker; then
     echo -e "${YELLOW}⚠️${NC} WireGuard not installed, but Docker found"
-    echo "   You can run WireGuard in Docker or install WireGuard manually"
     WG_MODE="docker"
 else
     echo -e "${YELLOW}⚠️${NC} Neither WireGuard nor Docker found"
-    echo "   Node will be configured but VPN tunnel requires WireGuard"
-    echo "   Install with: sudo apt install wireguard"
     WG_MODE="none"
 fi
 
@@ -86,26 +163,21 @@ if [ "$WG_AVAILABLE" = true ]; then
 fi
 
 # Get node information
-NODE_ID="${NODE_ID:-$(hostname | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]'- | head -20)}"
+NODE_ID="${NODE_ID:-$(hostname | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]-' | head -20)}"
 
-# Get external IP
 echo ""
 echo "🌐 Detecting external IP..."
 EXTERNAL_IP=$(curl -s -m 5 https://ipapi.co/ip 2>/dev/null || echo "unknown")
 echo -e "${GREEN}✓${NC} External IP: $EXTERNAL_IP"
 
-# Get country
 COUNTRY=$(curl -s -m 5 https://ipapi.co/country 2>/dev/null || echo "XX")
 CITY=$(curl -s -m 5 https://ipapi.co/city 2>/dev/null || echo "Unknown")
 
-# Get default interface
 DEFAULT_IFACE=$(ip -4 route show default 2>/dev/null | awk '{print $5}' | head -1 || echo "eth0")
 
-# VPN config
 VPN_IP="10.0.0.2/24"
 LISTEN_PORT=51820
 
-# Country names
 declare -A COUNTRY_NAMES
 COUNTRY_NAMES["ES"]="Spain"
 COUNTRY_NAMES["GB"]="United Kingdom"
@@ -136,9 +208,9 @@ COUNTRY_NAME="${COUNTRY_NAMES[$COUNTRY]:-$COUNTRY}"
 
 echo -e "${GREEN}✓${NC} Location: $CITY, $COUNTRY_NAME"
 
-# Create registry entry
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+# Create registry entry
 if [ "$WG_AVAILABLE" = true ]; then
     cat > "$REGISTRY" << EOF
 {
@@ -154,19 +226,20 @@ if [ "$WG_AVAILABLE" = true ]; then
 }
 EOF
 
-    # Create WireGuard config
     cat > "$CONFIG" << EOF
 [Interface]
 PrivateKey = $PRIVATE_KEY
 Address = $VPN_IP
 ListenPort = $LISTEN_PORT
 
-# NAT/masquerade for forwarding peer traffic
 PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o $DEFAULT_IFACE -j MASQUERADE
 PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o $DEFAULT_IFACE -j MASQUERADE
 EOF
 
     chmod 600 "$CONFIG"
+    
+    # Announce to registry
+    announce_to_registry "$(cat "$REGISTRY")"
     
     echo ""
     echo -e "${GREEN}✅ VPN Mesh node '$NODE_ID' configured!${NC}"
@@ -178,14 +251,13 @@ EOF
     echo -e "   🔑 Public Key: ${CYAN}$PUBLIC_KEY${NC}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
+    echo -e "${CYAN}🌐 View your node on the live map:${NC}"
+    echo "   https://stigg86.github.io/vpn-mesh/"
+    echo ""
     echo -e "${YELLOW}To start VPN interface:${NC}"
     echo "   sudo wg-quick up $CONFIG"
-    echo ""
-    echo -e "${YELLOW}To connect to this node, other nodes need your public key.${NC}"
-    echo "   Run: vpn_mesh.py status"
-    
+
 else
-    # No WireGuard - create registry without keys
     cat > "$REGISTRY" << EOF
 {
   "node_id": "$NODE_ID",
@@ -195,10 +267,12 @@ else
   "version": "0.3.0",
   "uptime": "100%",
   "updated": "$TIMESTAMP",
-  "note": "WireGuard not installed - install with: sudo apt install wireguard"
+  "note": "WireGuard not installed"
 }
 EOF
 
+    announce_to_registry "$(cat "$REGISTRY")"
+    
     echo ""
     echo -e "${GREEN}✅ Node registered (WireGuard pending install)${NC}"
     echo ""
@@ -210,8 +284,6 @@ EOF
     echo ""
     echo -e "${RED}Next step - install WireGuard:${NC}"
     echo "   sudo apt update && sudo apt install wireguard"
-    echo ""
-    echo "Then run setup again: vpn_mesh.py setup"
 fi
 
 echo ""
@@ -220,8 +292,6 @@ echo "   Registry: $REGISTRY"
 echo "   Config: $CONFIG"
 echo "   Keys: $PRIVATE_KEY_FILE, $PUBLIC_KEY_FILE"
 echo ""
-echo -e "${CYAN}Next steps:${NC}"
-echo "   1. Install WireGuard if not already: sudo apt install wireguard"
-echo "   2. Start VPN: sudo wg-quick up $CONFIG"
-echo "   3. Check status: python3 ~/.openclaw/skills/vpn-mesh/scripts/vpn_mesh.py status"
-echo "   4. Share your public key with other node operators"
+echo -e "${CYAN}Commands:${NC}"
+echo "   Check status: python3 ~/.openclaw/skills/vpn-mesh/scripts/vpn_mesh.py status"
+echo "   View map: https://stigg86.github.io/vpn-mesh/"

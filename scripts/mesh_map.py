@@ -7,11 +7,14 @@ Generates a stunning HTML visualization of the mesh network
 import json
 import sys
 import time
+import os
 from pathlib import Path
 
 MESH_DIR = Path.home() / ".openclaw" / "vpn-mesh"
 REGISTRY_FILE = MESH_DIR / "registry.json"
-PUBLIC_REGISTRY = "https://gist.githubusercontent.com/stigg86/420f5fec0c401586b2d9b98cc5d969c5/raw/nodes.json"
+
+# Public registry - can be overridden via VPN_MESH_REGISTRY env var
+DEFAULT_REGISTRY = "https://gist.githubusercontent.com/stigg86/420f5fec0c401586b2d9b98cc5d969c5/raw/nodes.json"
 
 # Country coordinates
 COUNTRY_COORDS = {
@@ -44,27 +47,90 @@ FLAG_EMOJI = {
 }
 
 
+def get_public_registry():
+    """Get registry URL from env or default"""
+    return os.environ.get("VPN_MESH_REGISTRY", DEFAULT_REGISTRY)
+
+
+def load_nodes_from_gist_api(gist_id):
+    """Fetch nodes using GitHub API to get current raw_url"""
+    import urllib.request
+    
+    # Try to get raw_url from Gist API (more reliable than hardcoded URLs)
+    token = os.environ.get("GITHUB_TOKEN", "")
+    
+    try:
+        req = urllib.request.Request(f"https://api.github.com/gists/{gist_id}")
+        if token:
+            req.add_header("Authorization", f"token {token}")
+        req.add_header("Accept", "application/vnd.github+json")
+        
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            gist = json.loads(resp.read())
+            raw_url = gist["files"]["nodes.json"]["raw_url"]
+            
+            # Fetch from raw_url
+            req2 = urllib.request.Request(raw_url)
+            with urllib.request.urlopen(req2) as resp2:
+                return json.loads(resp2.read())
+    except Exception as e:
+        print(f"  ⚠️ Could not fetch from Gist API: {e}")
+    
+    return []
+
+
 def load_nodes():
-    """Load nodes from registry"""
+    """Load nodes from registry — merges local + public"""
+    all_nodes = []
+    seen_ids = set()
+    
+    # Load local registry first
     if REGISTRY_FILE.exists():
         try:
             data = json.loads(REGISTRY_FILE.read_text())
             if isinstance(data, list):
-                return data
-            return [data]
-        except:
-            pass
+                for n in data:
+                    if n.get("node_id"):
+                        all_nodes.append(n)
+                        seen_ids.add(n["node_id"])
+            elif isinstance(data, dict) and data.get("node_id"):
+                all_nodes.append(data)
+                seen_ids.add(data["node_id"])
+        except Exception as e:
+            print(f"  ⚠️ Error reading local registry: {e}")
     
-    # Try public registry
-    try:
-        import urllib.request
-        with urllib.request.urlopen(PUBLIC_REGISTRY, timeout=5) as resp:
-            data = json.loads(resp.read().decode())
-            return data if isinstance(data, list) else data.get("nodes", [])
-    except:
-        pass
+    # Try public registry - first via API for reliability
+    registry = get_public_registry()
     
-    return []
+    # Extract Gist ID if this is a Gist URL
+    import re
+    gist_match = re.search(r'gist\.github(?:usercontent)?\.com/([^/]+)/([a-f0-9]+)', registry)
+    
+    if gist_match:
+        # It's a Gist URL - use API for reliability
+        gist_id = gist_match.group(2)
+        public_nodes = load_nodes_from_gist_api(gist_id)
+        for node in public_nodes:
+            if node.get("node_id") not in seen_ids:
+                all_nodes.append(node)
+                seen_ids.add(node["node_id"])
+    else:
+        # Try direct URL fetch
+        try:
+            import urllib.request
+            with urllib.request.urlopen(registry, timeout=5) as resp:
+                data = json.loads(resp.read().decode())
+                if isinstance(data, list):
+                    for node in data:
+                        if node.get("node_id") not in seen_ids:
+                            all_nodes.append(node)
+                            seen_ids.add(node["node_id"])
+                elif isinstance(data, dict) and data.get("node_id") not in seen_ids:
+                    all_nodes.append(data)
+        except Exception as e:
+            print(f"  ⚠️ Could not fetch public registry: {e}")
+    
+    return all_nodes
 
 
 def get_coords(country):
@@ -124,13 +190,9 @@ def generate_html(nodes):
             overflow-x: hidden;
         }}
         
-        /* Animated background */
         .bg-pattern {{
             position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
+            top: 0; left: 0; right: 0; bottom: 0;
             background: 
                 radial-gradient(circle at 20% 80%, var(--accent-glow) 0%, transparent 50%),
                 radial-gradient(circle at 80% 20%, rgba(99, 102, 241, 0.15) 0%, transparent 40%);
@@ -146,7 +208,6 @@ def generate_html(nodes):
             padding: 40px 20px;
         }}
         
-        /* Header */
         header {{
             text-align: center;
             padding: 60px 0;
@@ -169,7 +230,6 @@ def generate_html(nodes):
             font-weight: 400;
         }}
         
-        /* Stats Grid */
         .stats-grid {{
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -194,88 +254,65 @@ def generate_html(nodes):
         .stat-value {{
             font-size: 3em;
             font-weight: 700;
-            color: var(--accent);
-            line-height: 1;
-            margin-bottom: 8px;
+            background: linear-gradient(135deg, #6366f1, #a855f7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
         }}
         
         .stat-label {{
             font-size: 0.9em;
             color: var(--text-secondary);
+            margin-top: 8px;
             text-transform: uppercase;
             letter-spacing: 0.1em;
-        }}
-        
-        /* Map Container */
-        .map-container {{
-            position: relative;
-            border-radius: 24px;
-            overflow: hidden;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            margin: 40px 0;
-            box-shadow: 0 0 80px rgba(99, 102, 241, 0.1);
-        }}
-        
-        #map {{
-            width: 100%;
-            height: 500px;
-            background: var(--bg-secondary);
-        }}
-        
-        .map-overlay {{
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 16px 20px;
-            z-index: 1000;
-        }}
-        
-        .map-overlay h3 {{
-            font-size: 0.85em;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            margin-bottom: 8px;
         }}
         
         .live-indicator {{
-            display: flex;
+            display: inline-flex;
             align-items: center;
             gap: 8px;
+            padding: 8px 16px;
+            background: var(--bg-card);
+            border-radius: 20px;
+            font-size: 0.85em;
+            margin-top: 20px;
         }}
         
-        .pulse {{
-            width: 10px;
-            height: 10px;
+        .live-dot {{
+            width: 8px;
+            height: 8px;
             background: var(--success);
             border-radius: 50%;
             animation: pulse 2s infinite;
         }}
         
         @keyframes pulse {{
-            0%, 100% {{ opacity: 1; transform: scale(1); }}
-            50% {{ opacity: 0.5; transform: scale(1.2); }}
+            0%, 100% {{ opacity: 1; }}
+            50% {{ opacity: 0.5; }}
         }}
         
-        /* Nodes Grid */
+        .map-section {{
+            margin: 40px 0;
+        }}
+        
+        #map {{
+            height: 500px;
+            border-radius: 16px;
+            z-index: 1;
+        }}
+        
         .nodes-section {{
-            margin: 60px 0;
+            margin-top: 40px;
         }}
         
-        .section-header {{
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 24px;
-        }}
-        
-        .section-header h2 {{
+        .section-title {{
             font-size: 1.5em;
             font-weight: 600;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
         }}
         
         .nodes-grid {{
@@ -289,12 +326,12 @@ def generate_html(nodes):
             border: 1px solid var(--border);
             border-radius: 16px;
             padding: 24px;
-            transition: all 0.3s;
+            transition: transform 0.2s, box-shadow 0.2s;
         }}
         
         .node-card:hover {{
-            border-color: var(--accent);
-            box-shadow: 0 0 30px var(--accent-glow);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
         }}
         
         .node-header {{
@@ -308,7 +345,6 @@ def generate_html(nodes):
             font-family: 'JetBrains Mono', monospace;
             font-size: 1.1em;
             font-weight: 600;
-            color: var(--text-primary);
         }}
         
         .node-flag {{
@@ -319,6 +355,7 @@ def generate_html(nodes):
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 12px;
+            margin-bottom: 16px;
         }}
         
         .info-item {{
@@ -336,7 +373,7 @@ def generate_html(nodes):
         
         .info-value {{
             font-size: 0.95em;
-            color: var(--text-primary);
+            font-weight: 500;
         }}
         
         .node-status {{
@@ -344,9 +381,9 @@ def generate_html(nodes):
             align-items: center;
             gap: 6px;
             padding: 4px 10px;
-            border-radius: 20px;
+            border-radius: 12px;
             font-size: 0.8em;
-            margin-top: 16px;
+            font-weight: 500;
         }}
         
         .node-status.online {{
@@ -354,105 +391,85 @@ def generate_html(nodes):
             color: var(--success);
         }}
         
-        .node-status.offline {{
-            background: rgba(239, 68, 68, 0.15);
-            color: #ef4444;
-        }}
-        
-        /* Connect Button */
         .connect-btn {{
-            background: linear-gradient(135deg, var(--accent) 0%, #8b5cf6 100%);
+            width: 100%;
+            padding: 12px;
             border: none;
-            color: white;
-            padding: 12px 24px;
             border-radius: 10px;
             font-size: 0.9em;
             font-weight: 600;
             cursor: pointer;
-            transition: all 0.3s;
-            width: 100%;
-            margin-top: 16px;
+            transition: all 0.2s;
+            background: var(--accent);
+            color: white;
         }}
         
         .connect-btn:hover {{
             transform: scale(1.02);
-            box-shadow: 0 10px 30px var(--accent-glow);
+            box-shadow: 0 4px 20px var(--accent-glow);
         }}
         
-        /* Empty State */
-        .empty-state {{
+        .footer {{
             text-align: center;
-            padding: 80px 40px;
-            background: var(--bg-card);
-            border-radius: 24px;
-            border: 1px dashed var(--border);
-        }}
-        
-        .empty-state h2 {{
-            font-size: 1.5em;
-            margin-bottom: 16px;
+            padding: 40px;
             color: var(--text-secondary);
         }}
         
-        .empty-state p {{
-            color: var(--text-secondary);
-            max-width: 400px;
-            margin: 0 auto;
-        }}
-        
-        /* Footer */
-        footer {{
-            text-align: center;
-            padding: 60px 0 30px;
-            color: var(--text-secondary);
-            font-size: 0.85em;
-        }}
-        
-        footer a {{
+        .footer a {{
             color: var(--accent);
             text-decoration: none;
         }}
         
-        /* Responsive */
-        @media (max-width: 768px) {{
-            h1 {{ font-size: 2.5em; }}
-            .stats-grid {{ grid-template-columns: 1fr 1fr; }}
-            #map {{ height: 350px; }}
+        /* Leaflet custom styles */
+        .custom-marker {{
+            background: transparent;
         }}
         
-        /* Custom Leaflet Styles */
-        .leaflet-container {{
-            background: var(--bg-secondary);
-            font-family: 'Inter', sans-serif;
+        .marker-pin {{
+            width: 40px;
+            height: 40px;
+            border-radius: 50% 50% 50% 0;
+            background: var(--accent);
+            position: absolute;
+            transform: rotate(-45deg);
+            left: -20px;
+            top: -40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 20px rgba(99, 102, 241, 0.5);
+        }}
+        
+        .marker-pin::after {{
+            content: '';
+            width: 20px;
+            height: 20px;
+            background: white;
+            border-radius: 50%;
+            transform: rotate(45deg);
         }}
         
         .leaflet-popup-content-wrapper {{
             background: var(--bg-card);
             color: var(--text-primary);
             border-radius: 12px;
-            border: 1px solid var(--border);
         }}
         
         .leaflet-popup-tip {{
             background: var(--bg-card);
-            border: 1px solid var(--border);
-        }}
-        
-        .custom-marker {{
-            background: var(--accent);
-            border-radius: 50%;
-            border: 3px solid white;
-            box-shadow: 0 4px 20px rgba(99, 102, 241, 0.5);
         }}
     </style>
 </head>
 <body>
     <div class="bg-pattern"></div>
-    
     <div class="container">
         <header>
-            <h1>🌐 VPN Mesh Network</h1>
+            <h1>🌐 VPN Mesh</h1>
             <p class="subtitle">Decentralized VPN exit nodes powered by OpenClaw agents</p>
+            <div class="live-indicator">
+                <span class="live-dot"></span>
+                <span>Live Network • Updated just now</span>
+            </div>
         </header>
         
         <div class="stats-grid">
@@ -469,175 +486,126 @@ def generate_html(nodes):
                 <div class="stat-label">Avg Uptime</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value">24/7</div>
-                <div class="stat-label">Always On</div>
+                <div class="stat-value">{len([n for n in nodes if n.get('endpoint')])}</div>
+                <div class="stat-label">Peers Online</div>
             </div>
         </div>
         
-        <div class="map-container">
-            <div class="map-overlay">
-                <h3>Network Status</h3>
-                <div class="live-indicator">
-                    <div class="pulse"></div>
-                    <span>Live</span>
-                </div>
-            </div>
+        <div class="map-section">
             <div id="map"></div>
         </div>
         
         <div class="nodes-section">
-            <div class="section-header">
-                <h2>🖧 All Nodes ({total_nodes})</h2>
-                <span style="color: var(--text-secondary); font-size: 0.9em;">Click to connect</span>
-            </div>
-            
-            {"<div class='nodes-grid'>" if nodes else "<div class='empty-state'><h2>No nodes online yet</h2><p>Be the first to join the network! Install the vpn-mesh skill and run setup to become a node.</p></div>"}
+            <h2 class="section-title">🖧 Nodes ({total_nodes})</h2>
+            <div class="nodes-grid">
 """
 
     for node in nodes:
-        country = node.get("country", "XX")
-        flag = FLAG_EMOJI.get(country, "🏳️")
-        name = COUNTRY_NAMES.get(country, country)
-        coords = get_coords(country)
-        is_current = node.get("public_key") == current_pubkey
+        flag = FLAG_EMOJI.get(node.get("country", ""), "🌍")
+        country_name = COUNTRY_NAMES.get(node.get("country", ""), node.get("country", "Unknown"))
+        city = node.get("city", "Unknown")
+        uptime = node.get("uptime", "0%")
+        node_id = node.get("node_id", "unknown")
+        pubkey = node.get("public_key", "")
+        is_current = pubkey == current_pubkey
+        
+        btn_html = f"<button class='connect-btn' style='background: var(--bg-secondary); cursor: default;'>✓ This is your node</button>" if is_current else f"<button class='connect-btn' onclick='alert(\"Run: vpn_mesh connect {node_id}\")'>Connect</button>"
         
         html += f"""
             <div class="node-card">
                 <div class="node-header">
                     <div>
-                        <div class="node-id">{node.get('node_id', 'Unknown')}{"</span>" if is_current else ""}</div>
-                        <span style="font-size: 0.8em; color: var(--text-secondary);">{"Your node" if is_current else flag + " " + name}</span>
+                        <div class="node-id">{node_id}</span></div>
+                        {"<span style='font-size: 0.8em; color: var(--text-secondary);'>Your node</span>" if is_current else ""}
                     </div>
                     <div class="node-flag">{flag}</div>
                 </div>
                 <div class="node-info">
                     <div class="info-item">
+                        <span class="info-label">Country</span>
+                        <span class="info-value">{country_name}</span>
+                    </div>
+                    <div class="info-item">
                         <span class="info-label">City</span>
-                        <span class="info-value">{node.get('city', name)}</span>
+                        <span class="info-value">{city}</span>
                     </div>
                     <div class="info-item">
                         <span class="info-label">Uptime</span>
-                        <span class="info-value">{node.get('uptime', '100%')}</span>
+                        <span class="info-value">{uptime}</span>
                     </div>
                     <div class="info-item">
-                        <span class="info-label">Endpoint</span>
-                        <span class="info-value" style="font-family: 'JetBrains Mono', monospace; font-size: 0.85em;">{node.get('endpoint', 'N/A')}</span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">Last Seen</span>
-                        <span class="info-value">{node.get('updated', 'Unknown')[:10]}</span>
+                        <span class="info-label">Version</span>
+                        <span class="info-value">{node.get("version", "unknown")}</span>
                     </div>
                 </div>
-                <div class="node-status online">
-                    <span>●</span> Online
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span class="node-status online">✓ Online</span>
                 </div>
-                {"<button class='connect-btn' onclick=\"alert('Connected! Use: vpn_mesh connect " + node.get('node_id', '') + "')\">🌐 Connect to this node</button>" if not is_current else "<button class='connect-btn' style='background: var(--bg-secondary); cursor: default;'>✓ This is your node</button>"}
-            </div>"""
-    
-    if nodes:
-        html += "</div>"
-    
+                {btn_html}
+            </div>
+"""
+
     html += f"""
+            </div>
         </div>
         
-        <footer>
-            <p>🌐 VPN Mesh Network · Powered by <a href="https://openclaw.ai">OpenClaw</a> · <a href="https://clawhub.com/skills/vpn-mesh">Get the skill</a></p>
-            <p style="margin-top: 8px; opacity: 0.6;">Secure · Decentralized · Agent-native VPN mesh</p>
-        </footer>
+        <div class="footer">
+            <p>Install your own node → <a href="https://clawhub.ai/stigg86/vpn-mesh">clawhub install vpn-mesh</a></p>
+        </div>
     </div>
     
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-        // Initialize map
-        const map = L.map('map', {{
-            center: [20, 0],
-            zoom: 2,
-            minZoom: 2,
-            maxZoom: 8,
-            scrollWheelZoom: true,
-        }});
-        
-        // Dark map tiles
-        L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
-            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
-            maxZoom: 19
-        }}).addTo(map);
-        
-        // Node data
         const nodes = {nodes_json};
         const coords = {coords_json};
         
-        // Custom node icon
         const nodeIcon = L.divIcon({{
             className: 'custom-marker',
-            iconSize: [16, 16],
-            iconAnchor: [8, 8],
+            html: '<div class="marker-pin"></div>',
+            iconSize: [40, 40],
+            iconAnchor: [20, 40],
+            popupAnchor: [0, -40]
         }});
         
-        // Add nodes to map
+        const map = L.map('map').setView([30, 0], 2);
+        
+        L.tileLayer('https{{{{}}}}.{{{{}}}}'.replace('{{{{}}}}', '').replace('{{{{}}}}', ''), {{
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+        }}).addTo(map);
+        
+        // Fix tile layer
+        L.tileLayer('https://{{}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+            maxZoom: 19
+        }}).addTo(map);
+        
         const markers = [];
-        nodes.forEach((node, i) => {{
+        nodes.forEach(node => {{
             const country = node.country || 'XX';
-            const coord = coords[country] || [20, 0];
-            const flag = {{""" + ", ".join(f'"{k}": "{v}"' for k, v in FLAG_EMOJI.items()) + """}}[country] || '🏳️';
+            const [lat, lng] = coords[country] || [20, 0];
             
-            const marker = L.marker(coord, {{ icon: nodeIcon }}).addTo(map);
-            
-            const popup = L.popup({{
-                closeButton: false,
-                className: 'node-popup'
-            }}).setContent(`
-                <div style="min-width: 180px;">
-                    <div style="font-size: 1.2em; font-weight: 600; margin-bottom: 4px;">
-                        {flag} ${{node.node_id}}
+            const popup = L.popup()
+                .setContent(`
+                    <div style="min-width: 200px;">
+                        <h3 style="margin: 0 0 8px;">${{node.node_id}}</h3>
+                        <p style="margin: 4px 0; color: #a0a0b0;">📍 ${{node.city || 'Unknown'}}, ${{node.country}}</p>
+                        <p style="margin: 4px 0; color: #a0a0b0;">⏱️ Uptime: ${{node.uptime || 'N/A'}}</p>
+                        ${{node.endpoint ? `<p style="margin: 4px 0; color: #a0a0b0;">🌐 ${{node.endpoint}}</p>` : ''}}
                     </div>
-                    <div style="color: #a0a0b0; font-size: 0.9em; margin-bottom: 8px;">
-                        ${{node.city || country}}
-                    </div>
-                    <div style="font-size: 0.8em; color: #a0a0b0;">
-                        ● Online · ${{node.uptime || '100%'}} uptime
-                    </div>
-                </div>
-            `);
+                `);
             
-            marker.bindPopup(popup);
-            markers.push({{ marker, node }});
+            const marker = L.marker([lat, lng], {{ icon: nodeIcon }})
+                .bindPopup(popup)
+                .addTo(map);
             
-            // Animate marker on hover
-            marker.on('mouseover', function() {{
-                this.getElement().style.transform = 'scale(1.5)';
-                this.getElement().style.transition = 'transform 0.2s';
-            }});
-            
-            marker.on('mouseout', function() {{
-                this.getElement().style.transform = 'scale(1)';
-            }});
+            markers.push(marker);
         }});
         
-        // Draw connection lines between nearby nodes (visual effect)
-        for (let i = 0; i < markers.length; i++) {{
-            for (let j = i + 1; j < markers.length; j++) {{
-                const coord1 = coords[markers[i].node.country] || [20, 0];
-                const coord2 = coords[markers[j].node.country] || [20, 0];
-                
-                // Only draw line if nodes are in same region
-                const latDiff = Math.abs(coord1[0] - coord2[0]);
-                const lonDiff = Math.abs(coord1[1] - coord2[1]);
-                
-                if (latDiff < 30 && lonDiff < 30) {{
-                    const polyline = L.polyline([coord1, coord2], {{
-                        color: 'rgba(99, 102, 241, 0.2)',
-                        weight: 1,
-                        dashArray: '5, 10'
-                    }}).addTo(map);
-                }}
-            }}
+        // Fit bounds if we have nodes
+        if (nodes.length > 0) {{
+            const group = L.featureGroup(markers);
+            map.fitBounds(group.getBounds().pad(0.2));
         }}
-        
-        // Auto-refresh every 30 seconds
-        setTimeout(() => {{
-            location.reload();
-        }}, 30000);
     </script>
 </body>
 </html>"""
@@ -646,37 +614,50 @@ def generate_html(nodes):
 
 
 def main():
+    demo_mode = "--demo" in sys.argv
+    html_mode = "--html" in sys.argv
+    
+    if not html_mode:
+        print("🌐 VPN Mesh")
+        print("="*20)
+        print("\nUsage:")
+        print("  mesh_map.py --html    Generate HTML map")
+        print("  mesh_map.py --demo   Generate demo map with sample nodes")
+        print("\nTo show real network nodes:")
+        print("  mesh_map.py")
+        return
+    
+    print("🔄 Loading nodes...")
     nodes = load_nodes()
     
-    if "--demo" in sys.argv:
-        # Use demo nodes
-        demo_path = MESH_DIR / "demo_nodes.json"
-        if demo_path.exists():
-            nodes = json.loads(demo_path.read_text())
+    if demo_mode:
+        demo_file = MESH_DIR / "demo_nodes.json"
+        if demo_file.exists():
+            try:
+                demo_nodes = json.loads(demo_file.read_text())
+                # Merge demo nodes with existing
+                existing_ids = {n.get("node_id") for n in nodes}
+                for dn in demo_nodes:
+                    if dn.get("node_id") not in existing_ids:
+                        nodes.append(dn)
+            except:
+                pass
+    
+    print(f"✅ Loaded {len(nodes)} nodes")
     
     html = generate_html(nodes)
+    output_file = MESH_DIR / "mesh-map.html"
+    output_file.write_text(html)
     
-    output = MESH_DIR / "mesh-map.html"
-    output.write_text(html, encoding='utf-8')
-    
-    print(f"""
-✅ VPN Mesh Map Generated
-━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📍 Location: {output}
-🖧 Nodes shown: {len(nodes)}
-🌐 Countries: {len(set(n.get('country', 'XX') for n in nodes))}
-
-Open in browser to see the interactive world map.
-
-To include demo nodes:
-   python3 mesh_map.py --demo
-
-To show real network nodes:
-   python3 mesh_map.py
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-    """)
+    print(f"📍 Location: {output_file}")
+    print(f"🖧 Nodes shown: {len(nodes)}")
+    countries = set(n.get("country", "?") for n in nodes)
+    print(f"🌐 Countries: {len(countries)}")
+    print(f"\nOpen in browser to see the interactive world map.")
+    print(f"\nTo include demo nodes:")
+    print(f"   python3 mesh_map.py --demo")
+    print(f"\nTo show real network nodes:")
+    print(f"   python3 mesh_map.py")
 
 
 if __name__ == "__main__":

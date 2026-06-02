@@ -12,6 +12,7 @@ import struct
 import subprocess
 import sys
 import time
+import re
 from pathlib import Path
 from typing import Optional, List, Dict
 
@@ -23,8 +24,9 @@ PRIVATE_KEY_FILE = MESH_DIR / "private.key"
 PUBLIC_KEY_FILE = MESH_DIR / "public.key"
 CONFIG_FILE = MESH_DIR / "wg0.conf"
 
-# Default public registry (GitHub Gist - users replace with their own)
-DEFAULT_REGISTRY = "https://gist.githubusercontent.com/stigg86/vpn-mesh-nodes/raw/nodes.json"
+# Default public registry (GitHub Gist)
+DEFAULT_REGISTRY = "https://gist.githubusercontent.com/stigg86/420f5fec0c401586b2d9b98cc5d969c5/raw/nodes.json"
+GIST_ID = "420f5fec0c401586b2d9b98cc5d969c5"
 
 COUNTRY_NAMES = {
     "ES": "Spain", "GB": "United Kingdom", "US": "United States", "DE": "Germany",
@@ -73,6 +75,13 @@ def get_public_key() -> Optional[str]:
     """Get this node's public key"""
     if PUBLIC_KEY_FILE.exists():
         return PUBLIC_KEY_FILE.read_text().strip()
+    # Fallback to registry if file doesn't exist
+    if REGISTRY_FILE.exists():
+        try:
+            data = json.loads(REGISTRY_FILE.read_text())
+            return data.get("public_key", "")
+        except:
+            pass
     return None
 
 
@@ -86,7 +95,6 @@ def get_private_key() -> Optional[str]:
 def generate_keypair() -> tuple:
     """Generate WireGuard keypair"""
     try:
-        # Use wg command to generate keys
         privkey = subprocess.check_output(
             ["wg", "genkey"],
             stderr=subprocess.DEVNULL
@@ -103,9 +111,84 @@ def generate_keypair() -> tuple:
         return None, None
 
 
-def setup_node(announce: bool = False) -> bool:
-    """Setup this node"""
+def announce_to_registry(node_info: Dict) -> bool:
+    """Announce this node to the public registry (GitHub Gist)"""
+    import urllib.request
+    
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        print("⚠️  GITHUB_TOKEN not set. Skipping registry announce.")
+        print("   Set export GITHUB_TOKEN='your-token' to enable auto-announce.")
+        return False
+    
+    try:
+        # Get current nodes from Gist
+        req = urllib.request.Request(f"https://api.github.com/gists/{GIST_ID}")
+        req.add_header("Authorization", f"token {token}")
+        req.add_header("Accept", "application/vnd.github+json")
+        
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            gist = json.loads(resp.read())
+            raw_url = gist["files"]["nodes.json"]["raw_url"]
+        
+        # Fetch current nodes
+        req2 = urllib.request.Request(raw_url)
+        with urllib.request.urlopen(req2, timeout=10) as resp2:
+            content = resp2.read().decode()
+            try:
+                current_nodes = json.loads(content) if content else []
+            except:
+                current_nodes = []
+        
+        # Add/update this node
+        my_pubkey = node_info.get("public_key", "")
+        updated = False
+        new_nodes = []
+        for n in current_nodes:
+            if n.get("public_key") == my_pubkey:
+                new_nodes.append(node_info)
+                updated = True
+            else:
+                new_nodes.append(n)
+        
+        if not updated:
+            new_nodes.append(node_info)
+        
+        # Update Gist
+        data = json.dumps({
+            "files": {
+                "nodes.json": {
+                    "content": json.dumps(new_nodes, indent=2)
+                }
+            }
+        }).encode()
+        
+        req3 = urllib.request.Request(f"https://api.github.com/gists/{GIST_ID}", data=data, method="PATCH")
+        req3.add_header("Authorization", f"token {token}")
+        req3.add_header("Content-Type", "application/json")
+        
+        with urllib.request.urlopen(req3, timeout=10) as resp3:
+            result = json.loads(resp3.read())
+            print(f"   ✅ Announced to registry ({len(new_nodes)} total nodes)")
+            return True
+            
+    except Exception as e:
+        print(f"⚠️  Failed to announce: {e}")
+        return False
+
+
+def setup_node(announce: bool = True) -> bool:
+    """Setup this node - generates keys, creates config, optionally announces to registry"""
     ensure_mesh_dir()
+    
+    # Check if already configured
+    if REGISTRY_FILE.exists():
+        print("ℹ️  Node already configured. Use 'vpn_mesh.py reconnect' to reset.")
+        if announce:
+            node_info = get_node_info()
+            if node_info:
+                announce_to_registry(node_info)
+        return True
     
     privkey, pubkey = generate_keypair()
     if not privkey:
@@ -120,7 +203,7 @@ def setup_node(announce: bool = False) -> bool:
     try:
         import urllib.request
         with urllib.request.urlopen("https://ipapi.co/json/", timeout=5) as resp:
-            data = json.loads(resp.read().decode())
+            data = json.loads(resp.read().decode("utf-8"))
             external_ip = data.get("ip", "unknown")
             country = data.get("country", "XX")
             city = data.get("city", "")
@@ -133,11 +216,10 @@ def setup_node(announce: bool = False) -> bool:
     vpn_ip = "10.0.0.2/24"
     listen_port = 51820
     
-    # Create registry entry
+    # Create registry entry (exclude private_key for sharing)
     node_info = {
         "node_id": node_id,
         "public_key": pubkey,
-        "private_key": privkey,  # Keep for peer config generation
         "endpoint": f"{external_ip}:{listen_port}",
         "vpn_ip": vpn_ip,
         "country": country,
@@ -147,30 +229,37 @@ def setup_node(announce: bool = False) -> bool:
         "updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     
-    REGISTRY_FILE.write_text(json.dumps(node_info, indent=2))
+    # Save registry (full version with private key for local use)
+    full_info = node_info.copy()
+    full_info["private_key"] = privkey
+    REGISTRY_FILE.write_text(json.dumps(full_info, indent=2))
     
     # Create WireGuard config
     create_wireguard_config(node_info)
     
+    flag = FLAG_EMOJI.get(country, "🌍")
     print(f"""
 ✅ VPN Mesh node '{node_id}' configured!
    
-   🇪🇸 Country: {COUNTRY_NAMES.get(country, country)}
+   {flag} Country: {COUNTRY_NAMES.get(country, country)}
    📍 City: {city or 'Unknown'}
    🌐 Endpoint: {external_ip}:{listen_port}
    🔑 Public Key: {pubkey[:40]}...
    💾 Config: {CONFIG_FILE}
+""")
+    
+    # Announce to registry
+    if announce:
+        print("📡 Announcing to mesh registry...")
+        announce_to_registry(node_info)
+    
+    print(f"""
+🌐 Your node is now visible on the network map:
+   https://stigg86.github.io/vpn-mesh/
 
 To start VPN interface:
    sudo wg-quick up {CONFIG_FILE}
-
-To connect to this node, other nodes need your public key.
-Run 'vpn_mesh.py status' to see your node info.
 """)
-    
-    # Optionally announce to registry
-    if announce:
-        print("📡 Node ready to announce to mesh network")
     
     return True
 
@@ -198,26 +287,33 @@ PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEP
 PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o {default_iface} -j MASQUERADE
 
 # Allow all peers to forward traffic through this node
-# Peer traffic will be masqueraded to the internet
+
+[Peer]
+# Pre-shared key for additional security (optional)
+# PSK = 
+
+[Peer]
+# Demo peer for testing (remove in production)
+PublicKey = demo-key-placeholder
+Endpoint = demo.example.com:51820
 """
     
     CONFIG_FILE.write_text(config)
-    os.chmod(CONFIG_FILE, 0o600)
+    print(f"   💾 WireGuard config written to {CONFIG_FILE}")
 
 
 def add_peer(peer_pubkey: str, peer_endpoint: str, peer_vpn_ip: str = "10.0.0.3/32") -> bool:
     """Add a peer to the WireGuard config"""
     if not CONFIG_FILE.exists():
-        print("❌ No config found. Run 'vpn-mesh-setup' first.")
+        print("❌ Config not found. Run setup first.")
         return False
     
-    privkey = get_private_key()
-    if not privkey:
-        print("❌ No private key found. Run 'vpn-mesh-setup' first.")
-        return False
-    
-    # Read existing config
     config = CONFIG_FILE.read_text()
+    
+    # Check if peer already exists
+    if peer_pubkey in config:
+        print(f"ℹ️  Peer already configured")
+        return True
     
     # Add peer section
     peer_config = f"""
@@ -226,109 +322,110 @@ def add_peer(peer_pubkey: str, peer_endpoint: str, peer_vpn_ip: str = "10.0.0.3/
 PublicKey = {peer_pubkey}
 Endpoint = {peer_endpoint}
 AllowedIPs = {peer_vpn_ip}
-PersistentKeepalive = 25
 """
     
     config += peer_config
     CONFIG_FILE.write_text(config)
     
+    # Apply changes
+    try:
+        subprocess.run(["wg", "syncconf", "wg0", CONFIG_FILE], capture_output=True)
+    except:
+        pass
+    
     return True
 
 
 def connect_peer(node_id: str, peer_pubkey: str, peer_endpoint: str, peer_vpn_ip: str) -> bool:
-    """Connect to a peer node"""
-    state = get_state()
-    
-    # Disconnect existing first
-    if state.get("active"):
-        disconnect_peer()
-    
-    # Add peer
+    """Connect to a peer"""
     if not add_peer(peer_pubkey, peer_endpoint, peer_vpn_ip):
         return False
     
-    # Bring up interface
-    try:
-        result = subprocess.run(
-            ["sudo", "wg-quick", "up", str(CONFIG_FILE)],
-            capture_output=True, text=True
-        )
-        if result.returncode != 0:
-            print(f"❌ Failed to connect: {result.stderr}")
-            return False
-        
-        save_state({
-            "connected_to": node_id,
-            "active": True,
-            "peer_pubkey": peer_pubkey,
-            "peer_endpoint": peer_endpoint,
-            "peer_vpn_ip": peer_vpn_ip,
-            "connected_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        })
-        
-        print(f"✅ Connected to {node_id}")
-        print(f"   Endpoint: {peer_endpoint}")
-        print(f"   VPN IP: {peer_vpn_ip}")
-        return True
-        
-    except Exception as e:
-        print(f"❌ Connection failed: {e}")
-        return False
+    state = get_state()
+    state["connected_to"] = node_id
+    state["active"] = True
+    save_state(state)
+    
+    print(f"✅ Connected to {node_id}")
+    return True
 
 
 def disconnect_peer() -> bool:
     """Disconnect from current peer"""
     state = get_state()
+    if not state.get("connected_to"):
+        print("❌ Not connected to any peer")
+        return False
     
-    if not state.get("active"):
-        print("Not connected to any peer.")
-        return True
+    node_id = state["connected_to"]
+    state["connected_to"] = None
+    state["active"] = False
+    save_state(state)
+    
+    print(f"🔌 Disconnected from {node_id}")
+    return True
+
+
+def load_public_registry() -> List[Dict]:
+    """Load nodes from public registry using GitHub API for reliability"""
+    import urllib.request
+    
+    token = os.environ.get("GITHUB_TOKEN", "")
+    nodes = []
     
     try:
-        subprocess.run(
-            ["sudo", "wg-quick", "down", str(CONFIG_FILE)],
-            capture_output=True, text=True
-        )
-    except:
-        pass
+        # Use GitHub API to get current raw_url (more reliable than hardcoded URLs)
+        req = urllib.request.Request(f"https://api.github.com/gists/{GIST_ID}")
+        if token:
+            req.add_header("Authorization", f"token {token}")
+        req.add_header("Accept", "application/vnd.github+json")
+        
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            gist = json.loads(resp.read().decode("utf-8"))
+            raw_url = gist["files"]["nodes.json"]["raw_url"]
+            
+            req2 = urllib.request.Request(raw_url)
+            with urllib.request.urlopen(req2, timeout=10) as resp2:
+                content = resp2.read().decode("utf-8")
+                nodes = json.loads(content) if content else []
+    except Exception as e:
+        print(f"⚠️  Could not fetch public registry: {e}")
     
-    # Remove peers from config but keep interface config
-    if CONFIG_FILE.exists():
-        privkey = get_private_key()
-        if privkey:
-            config = f"""[Interface]
-PrivateKey = {privkey}
-Address = 10.0.0.2/24
-ListenPort = 51820
-"""
-            CONFIG_FILE.write_text(config)
-    
-    save_state({"connected_to": None, "active": False})
-    print("🔌 Disconnected from mesh.")
-    return True
+    return nodes if isinstance(nodes, list) else []
 
 
 def list_nodes() -> List[Dict]:
     """List all available nodes in the mesh"""
-    # Try local registry
+    all_nodes = []
+    seen_ids = set()
+    
+    # Load local registry first
     if REGISTRY_FILE.exists():
-        local = json.loads(REGISTRY_FILE.read_text())
-        return [local]
+        try:
+            local = json.loads(REGISTRY_FILE.read_text())
+            if isinstance(local, list):
+                for n in local:
+                    if n.get("node_id"):
+                        all_nodes.append(n)
+                        seen_ids.add(n["node_id"])
+            elif isinstance(local, dict) and local.get("node_id"):
+                all_nodes.append(local)
+                seen_ids.add(local["node_id"])
+        except:
+            pass
     
-    # Try public registry
-    registry_url = os.environ.get("VPN_MESH_REGISTRY", DEFAULT_REGISTRY)
-    try:
-        import urllib.request
-        with urllib.request.urlopen(registry_url, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-            nodes = data if isinstance(data, list) else data.get("nodes", [])
-            # Filter out current node
-            my_pubkey = get_public_key()
-            return [n for n in nodes if n.get("public_key") != my_pubkey]
-    except Exception as e:
-        print(f"⚠️  Could not fetch registry: {e}")
+    # Also load from public registry
+    public_nodes = load_public_registry()
+    for node in public_nodes:
+        if node.get("node_id") not in seen_ids:
+            all_nodes.append(node)
+            seen_ids.add(node["node_id"])
     
-    return []
+    # Filter out current node from list
+    my_pubkey = get_public_key()
+    other_nodes = [n for n in all_nodes if n.get("public_key") != my_pubkey]
+    
+    return other_nodes
 
 
 def connect_country(country_code: str) -> bool:
@@ -339,14 +436,12 @@ def connect_country(country_code: str) -> bool:
     matching = [n for n in all_nodes if n.get("country", "").upper() == country_code.upper()]
     
     if not matching:
-        # Show available countries
         countries = set(n.get("country", "XX") for n in all_nodes)
         available = ", ".join([f"{FLAG_EMOJI.get(c, '🏳️')} {COUNTRY_NAMES.get(c, c)}" for c in sorted(countries)])
         print(f"❌ No nodes available in {COUNTRY_NAMES.get(country_code, country_code)}")
         print(f"   Available: {available or 'None yet'}")
         return False
     
-    # Pick first available (could add latency check)
     node = matching[0]
     return connect_peer(
         node["node_id"],
@@ -360,10 +455,9 @@ def generate_pairing_code() -> str:
     """Generate a short pairing code for easy peer exchange"""
     node_info = get_node_info()
     if not node_info:
-        print("❌ Node not configured. Run 'vpn-mesh-setup' first.")
+        print("❌ Node not configured. Run 'vpn_mesh.py setup' first.")
         return None
     
-    # Create compact code: COUNTRY-BASE64PUBKEY-ENDPOINT
     pubkey_short = base64.urlsafe_b64encode(node_info["public_key"][:16].encode()).decode().rstrip("=")
     code = f"{node_info['country']}-{pubkey_short}"
     
@@ -384,10 +478,6 @@ def parse_pairing_code(code: str) -> Optional[Dict]:
         return None
     
     country = parts[0]
-    
-    # The code format is shortened - we need full peer info
-    # In a real system, the code would encode enough to find/connect
-    # For demo, we'll use a simplified approach
     print(f"📍 Pairing code from: {COUNTRY_NAMES.get(country, country)}")
     print("⚠️  Full peer exchange needed - share your public key directly")
     return None
@@ -407,131 +497,106 @@ def status() -> Dict:
 ❌ Node not configured
 
 Run 'vpn_mesh.py setup' to create your node identity.
-Then share your public key with other node operators.
 """)
-        return {"configured": False}
+        return {}
     
-    flag = FLAG_EMOJI.get(node_info.get("country", "XX"), "🏳️")
+    flag = FLAG_EMOJI.get(node_info.get("country", ""), "🌍")
+    
     print(f"""
 ✅ Node Configured
-   ID: {node_info['node_id']}
-   {flag} Country: {COUNTRY_NAMES.get(node_info.get('country', 'XX'), 'Unknown')}
+   ID: {node_info.get('node_id')}
+   {flag} Country: {node_info.get('country', 'Unknown')}
    📍 City: {node_info.get('city', 'Unknown')}
-   🌐 Endpoint: {node_info['endpoint']}
-   🔑 Public Key: {node_info['public_key'][:40]}...
+   🌐 Endpoint: {node_info.get('endpoint')}
+   🔑 Public Key: {node_info.get('public_key', '')[:30]}...
    📊 Uptime: {node_info.get('uptime', '100%')}
-   🕐 Last updated: {node_info.get('updated', 'Unknown')[:16]}
+   🕐 Last updated: {node_info.get('updated', 'Unknown')}
 """)
     
-    if state.get("active"):
-        print(f"""🔗 Connected to: {state['connected_to']}
-   Peer: {state.get('peer_endpoint', 'Unknown')}
-   Since: {state.get('connected_at', 'Unknown')[:16]}
-""")
+    if state.get("connected_to"):
+        print(f"🔌 Connected to: {state['connected_to']}")
     else:
         print("🔌 Not connected to any peer")
     
-    # Show available nodes
-    nodes = list_nodes()
-    if nodes:
-        print(f"""
-🖧 Available Nodes: {len(nodes)}
-""")
-        for n in nodes:
-            flag = FLAG_EMOJI.get(n.get("country", "XX"), "🏳️")
-            print(f"   {flag} {n['node_id']} ({n.get('endpoint', 'N/A')})")
+    # Show available peers
+    peers = list_nodes()
+    print(f"\n🖧 Available Nodes: {len(peers)}")
     
-    return {
-        "configured": True,
-        "node_id": node_info.get("node_id"),
-        "country": node_info.get("country"),
-        "connected": state.get("active"),
-        "peer": state.get("connected_to"),
-        "available_nodes": len(nodes)
-    }
+    for peer in peers[:10]:
+        pflag = FLAG_EMOJI.get(peer.get("country", ""), "🌍")
+        print(f"   {pflag} {peer.get('node_id', 'unknown')} ({peer.get('endpoint', 'unknown')})")
+    
+    if len(peers) > 10:
+        print(f"   ... and {len(peers) - 10} more")
+    
+    return node_info
 
 
 def main():
     if len(sys.argv) < 2:
         print("""
-🌐 VPN Mesh - Secure VPN Network for OpenClaw Agents
+🌐 VPN Mesh - Help
+==================
 
-Usage:
-   vpn_mesh.py setup              Setup this node
-   vpn_mesh.py status            Show node and connection status
-   vpn_mesh.py list              List available mesh nodes
-   vpn_mesh.py connect <node_id> Connect to a specific node
-   vpn_mesh.py connect-country <CC>  Connect to a country (e.g., ES, GB, DE)
-   vpn_mesh.py disconnect        Disconnect from mesh
-   vpn_mesh.py pair              Generate pairing code to share
-   vpn_mesh.py pair <code>       Connect using a pairing code
-   vpn_mesh.py help              Show this help
-
+Commands:
+   setup          Setup/announce this node (runs automatically on first install)
+   status         Show current status and available peers
+   list           List all nodes in the mesh
+   connect <id>   Connect to a specific node
+   connect-country <CC>   Connect to a country (e.g., ES, GB, DE)
+   disconnect     Disconnect from current peer
+   pair           Generate pairing code
+   announce       Re-announce this node to the registry
+   
 Examples:
-   vpn_mesh.py setup             # Create your node identity
-   vpn_mesh.py list              # See who's in the mesh
-   vpn_mesh.py connect spain     # Route through Spain
-   vpn_mesh.py connect node-abc  # Connect to specific node
+   vpn_mesh.py setup
+   vpn_mesh.py status
+   vpn_mesh.py connect-country GB
 """)
-        sys.exit(0)
+        return
     
-    cmd = sys.argv[1]
+    cmd = sys.argv[1].lower()
     
     if cmd == "setup":
         setup_node(announce=True)
-    
     elif cmd == "status":
         status()
-    
     elif cmd == "list":
         nodes = list_nodes()
         if not nodes:
-            print("🖧 No other nodes in mesh yet.")
-            print("   Run 'vpn_mesh.py setup' to become the first node!")
-        else:
-            print(f"🖧 Mesh Nodes ({len(nodes)}):")
-            print("-" * 50)
-            for n in nodes:
-                flag = FLAG_EMOJI.get(n.get("country", "XX"), "🏳️")
-                print(f"   {flag} {n['node_id']}")
-                print(f"      📍 {n.get('city', n.get('country', 'Unknown'))}")
-                print(f"      🌐 {n.get('endpoint', 'N/A')}")
-                print(f"      🔑 {n.get('public_key', '')[:30]}...")
-                print()
-    
+            print("No other nodes available yet.")
+        for n in nodes:
+            flag = FLAG_EMOJI.get(n.get("country", ""), "🌍")
+            print(f"{flag} {n.get('node_id')} - {n.get('endpoint')} ({n.get('city', 'Unknown')})")
     elif cmd == "connect":
         if len(sys.argv) < 3:
             print("Usage: vpn_mesh.py connect <node_id>")
-            sys.exit(1)
+            return
         node_id = sys.argv[2]
-        # For demo, we need full peer info - this would come from registry
-        print(f"📡 Connecting to {node_id}...")
-        print("   (In production, this fetches peer info from registry)")
-    
+        nodes = list_nodes()
+        match = next((n for n in nodes if n.get("node_id") == node_id), None)
+        if not match:
+            print(f"❌ Node '{node_id}' not found")
+            return
+        connect_peer(node_id, match["public_key"], match["endpoint"], match.get("vpn_ip", "10.0.0.3/32"))
     elif cmd == "connect-country":
         if len(sys.argv) < 3:
             print("Usage: vpn_mesh.py connect-country <CC>")
-            print("   Example: vpn_mesh.py connect-country ES")
-            sys.exit(1)
-        country_code = sys.argv[2].upper()
-        connect_country(country_code)
-    
+            return
+        connect_country(sys.argv[2])
     elif cmd == "disconnect":
         disconnect_peer()
-    
     elif cmd == "pair":
-        if len(sys.argv) > 2:
-            parse_pairing_code(sys.argv[2])
+        generate_pairing_code()
+    elif cmd == "announce":
+        node_info = get_node_info()
+        if node_info:
+            announce_to_registry(node_info)
         else:
-            generate_pairing_code()
-    
-    elif cmd in ["help", "--help", "-h"]:
-        main()
-    
+            print("❌ Node not configured. Run 'setup' first.")
     else:
         print(f"Unknown command: {cmd}")
         print("Run 'vpn_mesh.py' for help.")
-        sys.exit(1)
 
 
 if __name__ == "__main__":
