@@ -367,6 +367,134 @@ def disconnect_mesh():
         return False
 
 
+def list_mesh_nodes() -> List[Dict]:
+    """List all nodes in the mesh registry with their VPN IPs"""
+    my_pubkey = get_public_key()
+    all_nodes = load_public_registry()
+    
+    nodes = []
+    for n in all_nodes:
+        is_me = n.get("public_key") == my_pubkey
+        nodes.append({
+            "node_id": n.get("node_id", "unknown"),
+            "public_key": n.get("public_key", ""),
+            "endpoint": n.get("endpoint", ""),
+            "vpn_ip": n.get("vpn_ip", ""),
+            "country": n.get("country", ""),
+            "city": n.get("city", ""),
+            "is_me": is_me
+        })
+    
+    return nodes
+
+
+def route_all_through(node_id: str) -> bool:
+    """Route ALL traffic through a specific mesh node (VPN exit)
+    
+    Use this when you want an agent to tunnel through a specific country.
+    The target node becomes your internet exit point.
+    
+    Args:
+        node_id: The node_id from the mesh registry
+        
+    Returns:
+        True if routing was configured successfully
+    """
+    nodes = list_mesh_nodes()
+    target = None
+    for n in nodes:
+        if n["node_id"] == node_id:
+            target = n
+            break
+    
+    if not target:
+        print(f"❌ Node '{node_id}' not found in mesh registry")
+        return False
+    
+    if target.get("is_me"):
+        print("❌ Cannot route through yourself")
+        return False
+    
+    peer_vpn_ip = target.get("vpn_ip", "").replace("/32", "")
+    if not peer_vpn_ip:
+        print(f"❌ Node has no VPN IP assigned")
+        return False
+    
+    print(f"🌐 Routing ALL traffic through {node_id} ({target.get('city')}, {target.get('country')})...")
+    
+    # Enable IP forwarding
+    try:
+        subprocess.run(["sudo", "sysctl", "-w", "net.ipv4.ip_forward=1"], check=True, capture_output=True)
+        subprocess.run(["sudo", "sysctl", "-w", "net.ipv6.conf.all.forwarding=1"], check=True, capture_output=True)
+    except Exception as e:
+        print(f"⚠️  Could not enable IP forwarding: {e}")
+    
+    # Add route: all traffic (0.0.0.0/0) goes through the peer
+    # We use the peer's VPN IP as the gateway
+    try:
+        # Delete any existing default route via WireGuard
+        subprocess.run(["sudo", "ip", "route", "del", "default", "dev", "wg0"], capture_output=True)
+    except:
+        pass
+    
+    try:
+        # Add route: everything goes through wg0 to the peer
+        # The peer will forward to internet (via its NAT/masquerade)
+        result = subprocess.run(
+            ["sudo", "ip", "route", "add", "default", "via", peer_vpn_ip, "dev", "wg0"],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            print(f"⚠️  Route failed: {result.stderr}")
+            # Try alternative approach: use peer as gateway directly
+            result = subprocess.run(
+                ["sudo", "ip", "route", "add", "default", "dev", "wg0"],
+                capture_output=True,
+                text=True
+            )
+            if result.returncode != 0:
+                print(f"❌ Could not set default route: {result.stderr}")
+                return False
+    except Exception as e:
+        print(f"❌ Error configuring routing: {e}")
+        return False
+    
+    # Save routing state
+    state = get_state()
+    state["routing_through"] = node_id
+    state["exit_peer"] = peer_vpn_ip
+    save_state(state)
+    
+    flag = FLAG_EMOJI.get(target.get("country", ""), "🌍")
+    print(f"""
+✅ Routing configured!
+   Exit node: {flag} {node_id} ({target.get('city')})
+   Peer VPN IP: {peer_vpn_ip}
+   
+   All your traffic now exits via this node.
+   To verify: curl --interface wg0 ifconfig.me
+   To stop: vpn_mesh.py stop-routing
+""")
+    return True
+
+
+def stop_routing():
+    """Stop routing traffic through mesh and return to normal internet"""
+    try:
+        # Remove default route via wg0
+        subprocess.run(["sudo", "ip", "route", "del", "default", "dev", "wg0"], capture_output=True)
+    except:
+        pass
+    
+    state = get_state()
+    state.pop("routing_through", None)
+    state.pop("exit_peer", None)
+    save_state(state)
+    
+    print("✅ Routing stopped. Traffic now goes directly via your ISP.")
+
+
 def setup_node(announce: bool = True) -> bool:
     """Setup this node - generates keys, creates config, announces to registry, syncs peers"""
     ensure_mesh_dir()
@@ -543,6 +671,8 @@ Commands:
    sync           Re-sync peers from registry
    status         Show current status
    list           List all nodes in registry
+   route <id>     Route ALL traffic through a mesh node (VPN exit)
+   stop-routing   Stop routing through mesh, return to normal internet
    
 Quick Start:
    vpn_mesh.py setup        # One-time setup
@@ -579,6 +709,14 @@ Examples:
             flag = FLAG_EMOJI.get(n.get("country", ""), "🌍")
             is_me = " (YOU)" if n.get("public_key") == my_pubkey else ""
             print(f"   {flag} {n.get('node_id')}{is_me} - {n.get('endpoint')} ({n.get('city', 'Unknown')})")
+    elif cmd == "route":
+        if len(sys.argv) < 3:
+            print("Usage: vpn_mesh.py route <node_id>")
+            print("   Run 'vpn_mesh.py list' to see available nodes")
+        else:
+            route_all_through(sys.argv[2])
+    elif cmd == "stop-routing":
+        stop_routing()
     else:
         print(f"Unknown command: {cmd}")
         print("Run 'vpn_mesh.py' for help.")

@@ -195,6 +195,23 @@ The HTML map shows:
 └─────────────────────────────────────────────────────────┘
 ```
 
+## Mesh Architecture
+
+**Full mesh network** — Every node is connected to every other node.
+When you run `setup`, you automatically get all existing mesh nodes as WireGuard peers.
+
+**For agents to use mesh nodes on-demand:**
+1. Run `vpn_mesh.py list` to see available exit nodes
+2. Run `vpn_mesh.py route <node_id>` to route ALL traffic through that node
+3. Run `vpn_mesh.py stop-routing` to return to normal internet
+
+**Example use case:**
+- Your agent is on a Raspberry Pi in Spain
+- A user asks for content only available in the US
+- Agent runs `vpn_mesh.py route us-node` → traffic exits via US peer
+- User gets US-restricted content ✅
+- Agent runs `vpn_mesh.py stop-routing` → back to normal
+
 ## Use Cases
 
 **1. Bypass geo-restrictions**
