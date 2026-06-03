@@ -1,9 +1,9 @@
 ---
 name: vpn-mesh
-description: "Turn your OpenClaw agent into a secure VPN exit node. Mesh network for agents to route traffic through peer nodes worldwide. ⚠️ Requires GitHub token for full mesh (free at github.com/settings/tokens - needs 'gist' scope). VPN works locally without it."
+description: "Turn your OpenClaw agent into a secure VPN exit node. Mesh network for agents to route traffic through peer nodes worldwide. ⚠️ REQUIRES ROOT/SUDO for WireGuard installation. VPN will not work without it."
 metadata:
   {
-    "version": "0.7.1",
+    "version": "0.8.0",
     "openclaw": {
       "requires": { "bins": ["wg", "wg-quick"] },
       "install": [
@@ -26,30 +26,47 @@ metadata:
 
 **Decentralized VPN network for AI agents.** Turn your OpenClaw agent into a secure VPN exit node. Route traffic through peer nodes worldwide with one command.
 
-```
-Install:  clawhub install vpn-mesh
-Setup:    Auto-runs on first use via `vpn_mesh.py setup`
-Map:      https://stigg86.github.io/vpn-mesh/
+**[🌐 View Live Network Map](https://stigg86.github.io/vpn-mesh/)** — Auto-updates every 60 seconds.
+
+---
+
+## ⚠️ IMPORTANT: Prerequisites
+
+**This skill requires WireGuard to be installed BEFORE the VPN will work.**
+
+Users must run these commands manually (requires sudo/root access):
+
+```bash
+# 1. Install WireGuard (one-time setup)
+sudo apt-get update && sudo apt-get install -y wireguard-tools
+
+# 2. Verify installation
+wg --version
+
+# 3. Start VPN (requires sudo each time)
+sudo wg-quick up ~/.openclaw/vpn-mesh/wg0.conf
 ```
 
-## Live Network Map
+**Without WireGuard installed, the VPN will NOT work.** The skill will still load, but `wg` commands will fail.
 
-**🌐 https://stigg86.github.io/vpn-mesh/** — Live map auto-updates every 60 seconds.
+---
 
 ## Quick Start
 
 ```bash
-# 1. Install the skill
+# 1. Install WireGuard FIRST (see Prerequisites above)
+
+# 2. Install the skill
 clawhub install vpn-mesh
 
-# 2. Setup & announce your node (auto-runs on install, announces to registry)
+# 3. Setup & announce your node
 python3 ~/.openclaw/skills/vpn-mesh/scripts/vpn_mesh.py setup
 
-# 3. Start the VPN interface (requires WireGuard installed)
+# 4. Start the VPN (requires sudo)
 sudo wg-quick up ~/.openclaw/vpn-mesh/wg0.conf
 
-# 4. View your node on the live map
-#    https://stigg86.github.io/vpn-mesh/
+# 5. Verify and check status
+python3 ~/.openclaw/skills/vpn-mesh/scripts/vpn_mesh.py status
 ```
 
 ## Commands
@@ -263,24 +280,48 @@ python3 ~/.openclaw/skills/vpn-mesh/scripts/vpn_mesh.py list
 
 ## Troubleshooting
 
-**WireGuard not installed:**
+### "wg: command not found"
+**Cause:** WireGuard is not installed.
+
+**Fix:**
 ```bash
-sudo apt update && sudo apt install wireguard
+sudo apt-get update && sudo apt-get install -y wireguard-tools
 ```
 
-**Can't connect to peer:**
-- Verify peer's public key matches
-- Check endpoint IP:port is accessible
-- Ensure both nodes have WireGuard running
+### "Permission denied" on wg-quick up
+**Cause:** You don't have sudo access.
 
-**Node not showing on map:**
-- Check registry.json exists at ~/.openclaw/vpn-mesh/
-- Verify public_key is present
-- Check last_updated timestamp
-
-**Permission denied:**
+**Fix:** Make sure your user is in the `sudo` group:
 ```bash
+sudo usermod -aG sudo $USER
+# Then log out and back in
+```
+
+### Node shows as ⚫ Offline on the map
+**Cause:** WireGuard interface isn't running.
+
+**Fix:**
+```bash
+# Check if WireGuard is running
+sudo wg show
+
+# Start the VPN interface
 sudo wg-quick up ~/.openclaw/vpn-mesh/wg0.conf
+
+# Re-announce to registry
+python3 ~/.openclaw/skills/vpn-mesh/scripts/vpn_mesh.py announce
+```
+
+### "Cannot assign requested address" on wg-quick up
+**Cause:** VPN IP already in use by another process.
+
+**Fix:** Change your VPN IP in `~/.openclaw/vpn-mesh/wg0.conf` or stop the conflicting service.
+
+### Port 51820 already in use
+**Fix:**
+```bash
+sudo lsof -i :51820
+sudo kill <PID>
 ```
 
 ## Demo Mode
